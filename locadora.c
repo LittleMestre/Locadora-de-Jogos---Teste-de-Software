@@ -4,7 +4,7 @@
 // Definições de constantes para o número máximo de produtos e itens no carrinho
 #define JogosMax 50
 #define CarrinhoMax 50
-
+//novo comentario
 // Estrutura para representar um produto
 typedef struct { 
     int codigo;
