@@ -116,7 +116,7 @@ void ComprarProduto() {
             return;
         }
     }
-
+//opa
     // Caso o jogo nao tenha sido encontrado, adiciona um novo
     Jogo* jogo = PegarProdutoPorCodigo(codigo);
     if (jogo != NULL) {
