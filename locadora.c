@@ -156,7 +156,7 @@ void VisualizarCarrinho() {
     }
     printf("\nTotal do carrinho: R$%.2f\n", total);
 }
-
+//yan gay
 void FecharPedido() {
     if (numCarrinho == 0) {
         printf("\nCarrinho vazio, impossivel fechar o pedido.\n");
