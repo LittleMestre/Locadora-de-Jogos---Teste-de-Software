@@ -74,6 +74,7 @@ void Menu() {
     } while (opcao != 6);   // Continua até que o usuário escolha sair (opção 6)
 
 //teste yan
+//teste yanzin
 
         //Interface do Usuário
         printf("\n\n Bem vindo a Locadora\n\n");
