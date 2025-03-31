@@ -516,7 +516,7 @@ void FecharPedido{
         TotalCarrinho = 0;
         printf("Processando pagamento...")sleep(5);  
         printf("Pagamento realizado com sucesso!");
-    } else if(FormaDePagamento == 3) {//test
+    } else if(FormaDePagamento == 3) {//testmais
         printf("\nO PIX para pagamento é o numero (61) 971654518.");
         printf("Processando pagamento...")sleep(5);  
         printf("Pagamento realizado com sucesso!");
