@@ -18,9 +18,9 @@ app.listen(port, () => {
 // Conexão com o banco de dados
 const connection = mysql.createConnection({
   host: "127.0.0.1",
-  user: "root", 
+  user: "root",
   password: "Yhr@121110",
-  database: "loja_jogos", 
+  database: "loja_jogos",
 });
 
 // Conectando ao MySQL
@@ -38,7 +38,7 @@ const rl = readline.createInterface({
   output: process.stdout,
 });
 
-const DOMINIO_EMAIL = "@locadoradoze.com"; 
+const DOMINIO_EMAIL = "@locadoradoze.com";
 let carrinho = [];
 
 function iniciar() {
@@ -276,55 +276,67 @@ function finalizarCompra() {
       switch (opcaoPagamento) {
         case "1":
           const parcelamentoMaximo = carrinho.length > 3 ? 5 : 3;
-          rl.question(`\nDeseja parcelar a compra? (s/n): `, (querParcelar) => {
-            if (querParcelar.toLowerCase() === "s") {
-              rl.question(
-                `Em quantas vezes deseja parcelar (máximo ${parcelamentoMaximo} vezes)? `,
-                (parcelas) => {
-                  parcelas = parseInt(parcelas);
-                  if (
-                    isNaN(parcelas) ||
-                    parcelas < 1 ||
-                    parcelas > parcelamentoMaximo
-                  ) {
-                    console.log("\nNúmero de parcelas inválido.");
-                    menuCliente();
-                    return;
+          rl.question(
+            `\nDeseja parcelar a compra? (s/n): `,
+            (querParcelar) => {
+              if (querParcelar.toLowerCase() === "s") {
+                rl.question(
+                  `\nEm quantas vezes deseja parcelar (máximo ${parcelamentoMaximo} vezes)? `,
+                  (parcelas) => {
+                    parcelas = parseInt(parcelas);
+                    if (
+                      isNaN(parcelas) ||
+                      parcelas < 1 ||
+                      parcelas > parcelamentoMaximo
+                    ) {
+                      console.log("\nNúmero de parcelas inválido.");
+                      menuCliente();
+                      return;
+                    }
+                    console.log(
+                      `\nCompra no crédito em ${parcelas} vezes. Processando...`
+                    );
+                    // Aguarda 5 segundos antes de continuar
+                    setTimeout(() => {
+                      processarCompra(totalCompra, () => {
+                        console.log("Pagamento efetuado!");
+                        carrinho = [];
+                        menuCliente();
+                      });
+                    }, 5000);
                   }
-                  console.log(
-                    `\nCompra no crédito em ${parcelas} vezes. Processando...`
-                  );
-                  setTimeout(() => {
-                    console.log("Pagamento realizado!");
+                );
+              } else {
+                console.log("\nCompra no crédito. Processando...");
+                setTimeout(() => {
+                  processarCompra(totalCompra, () => {
+                    console.log("Pagamento efetuado!");
                     carrinho = [];
                     menuCliente();
-                  }, 5000);
-                }
-              );
-            } else {
-              console.log("\nCompra no crédito. Processando...");
-              setTimeout(() => {
-                console.log("Pagamento efetuado!");
-                carrinho = [];
-                menuCliente();
-              }, 5000);
+                  });
+                }, 5000);
+              }
             }
-          });
+          );
           break;
         case "2":
           console.log("\nCompra no débito. Processando...");
           setTimeout(() => {
-            console.log("Pagamento efetuado!");
-            carrinho = [];
-            menuCliente();
+            processarCompra(totalCompra, () => {
+              console.log("Pagamento efetuado!");
+              carrinho = [];
+              menuCliente();
+            });
           }, 5000);
           break;
         case "3":
           console.log("\nCompra via PIX. Por favor, escaneie o QR Code...");
           setTimeout(() => {
-            console.log("Pagamento efetuado!");
-            carrinho = [];
-            menuCliente();
+            processarCompra(totalCompra, () => {
+              console.log("Pagamento efetuado!");
+              carrinho = [];
+              menuCliente();
+            });
           }, 5000);
           break;
         default:
@@ -332,7 +344,73 @@ function finalizarCompra() {
           menuCliente();
       }
     }
-  );
+  );  
+}
+
+function processarCompra(totalCompra, callback) {
+  // Iniciar uma transação para garantir que todas as operações sejam bem-sucedidas
+  connection.beginTransaction((err) => {
+    if (err) {
+      console.error("Erro ao iniciar transação:", err);
+      return callback(err);
+    }
+
+    // Inserir a venda no histórico
+    const queryInsertVenda =
+      "INSERT INTO historico_vendas (valor_total) VALUES (?)";
+    connection.query(queryInsertVenda, [totalCompra], (err, result) => {
+      if (err) {
+        console.error("Erro ao inserir venda no histórico:", err);
+        return connection.rollback(() => callback(err));
+      }
+
+      const idVenda = result.insertId; // ID da venda inserida
+
+      // Iterar sobre os itens do carrinho para atualizar o estoque e registrar os detalhes da venda
+      let itensProcessados = 0;
+      carrinho.forEach((item) => {
+        const { produto, quantidade } = item;
+
+        // Atualizar a quantidade no banco de dados
+        const queryUpdateJogo = "UPDATE jogos SET quantidade = quantidade - ? WHERE id = ?";
+        connection.query(queryUpdateJogo, [quantidade, produto.id], (err) => {
+          if (err) {
+            console.error("Erro ao atualizar quantidade do jogo:", err);
+            return connection.rollback(() => callback(err));
+          }
+
+          // Atualizar o histórico de vendas com os detalhes do item
+          const queryUpdateHistorico = "UPDATE historico_vendas SET codigo_jogo = ?, nome_jogo = ?, quantidade_vendida = ? WHERE id = ?";
+          connection.query(
+            queryUpdateHistorico,
+            [produto.id, produto.nome, quantidade, idVenda],
+            (err) => {
+              if (err) {
+                console.error(
+                  "Erro ao atualizar histórico de vendas com detalhes do item:",
+                  err
+                );
+                return connection.rollback(() => callback(err));
+              }
+
+              itensProcessados++;
+              if (itensProcessados === carrinho.length) {
+                // Se todos os itens foram processados com sucesso, finalizar a transação
+                connection.commit((err) => {
+                  if (err) {
+                    console.error("Erro ao finalizar transação:", err);
+                    return connection.rollback(() => callback(err));
+                  }
+                  console.log("Compra processada com sucesso!");
+                  callback(null); // Indica sucesso
+                });
+              }
+            }
+          );
+        });
+      });
+    });
+  });
 }
 
 // Função para cadastrar um novo funcionário
@@ -345,7 +423,7 @@ function cadastrarFuncionario() {
           rl.question("Digite o email do funcionário: ", (email) => {
             if (!email.endsWith(DOMINIO_EMAIL)) {
               console.log("\nEmail deve terminar com " + DOMINIO_EMAIL);
-              iniciar(); 
+              iniciar();
               return;
             }
             rl.question("Digite a senha do funcionário: ", (senha) => {
@@ -428,42 +506,6 @@ function loginFuncionario() {
   });
 }
 
-// Menu do Funcionário
-function menuFuncionario() {
-  rl.question(
-    "\nMenu do Funcionário:\n1. Cadastrar Jogos\n2. Visualizar Catálogo\n3. Cadastrar Funcionário\n4. Ver Histórico de Vendas\n5. Atualizar Informações de Jogo\n6. Excluir Jogo\n7. Sair\nEscolha: ",
-    (opcao) => {
-      switch (opcao) {
-        case "1":
-          cadastrarProduto();
-          break;
-        case "2":
-          listarProdutosFuncionario();
-          break; 
-        case "3":
-          cadastrarFuncionario();
-          break; 
-        case "4":
-          historicoVendasFunc();
-          break;
-        case "5":
-          atualizarInformacoes();
-          break;
-        case "6":
-          excluirJogo();
-          break;
-        case "7":
-          console.log("\nObrigado por usar o sistema! Volte sempre!\n");
-          rl.close();
-          break;
-        default:
-          console.log("\nEssa opção não existe. Tente outra.");
-          menuFuncionario();
-      }
-    }
-  );
-}
-
 // Função para listar produtos no catálogo para Clientes
 function listarProdutos() {
   const query = "SELECT * FROM jogos";
@@ -487,7 +529,7 @@ function listarProdutos() {
           jogo.genero
         } | Preço: R$${parseFloat(jogo.preco).toFixed(2)} | Quantidade: ${
           jogo.quantidade
-        }`
+        }| Disponibilidade: ${jogo.disponibilidade}`
       );
     });
 
@@ -547,161 +589,110 @@ function listarProdutosFuncionario() {
     console.log("\nCatálogo de Produtos:");
     results.forEach((jogo) => {
       console.log(
-        `Código: ${jogo.id} | Jogo: ${jogo.nome} | Gênero: ${
-          jogo.genero
-        } | Preço: R$${parseFloat(jogo.preco).toFixed(2)} | Quantidade: ${
-          jogo.quantidade
+        `Código: ${jogo.id} | Jogo: ${jogo.nome} | Gênero: ${jogo.genero} | Preço: R$${parseFloat(
+          jogo.preco
+        ).toFixed(2)} | Quantidade: ${jogo.quantidade}| Disponibilidade: ${
+          jogo.disponibilidade
         }`
       );
     });
-
     menuFuncionario();
   });
 }
 
-// Função para cadastrar produto
-const JogosMax = 100;
+// Função para cadastrar um produto
 function cadastrarProduto() {
-  // Primeiro, contar quantos jogos já existem
-  connection.query("SELECT COUNT(*) AS total FROM jogos", (err, results) => {
-    if (err) {
-      console.error("Erro ao contar jogos:", err);
-      return menuFuncionario();
-    }
-    const numJogos = results[0].total;
+  rl.question("\nDigite o nome do jogo: ", (nome) => {
+    rl.question("Digite o gênero do jogo: ", (genero) => {
+      rl.question("Digite a classificação do jogo (Livre, 10+, 12+, 16+, 18+): ", (classificacao) => {
+        rl.question("Digite a disponibilidade do jogo (venda ou aluguel): ", (disponibilidade) => {
+          rl.question("Digite o preço do jogo: R$", (preco) => {
+            preco = parseFloat(preco);
+            rl.question("Digite a quantidade do jogo: ", (quantidade) => {
+              quantidade = parseInt(quantidade);
 
-    if (numJogos >= JogosMax) {
-      console.log(`Limite máximo de jogos (${JogosMax}) atingido.`);
-      return menuFuncionario();
-    }
-
-    rl.question("\nDigite o nome do jogo: ", (nome) => {
-      rl.question("Digite o gênero do jogo: ", (genero) => {
-        rl.question(
-          "Digite a classificação do jogo (Livre, 10+, 12+, 16+, 18+): ",
-          (classificacao) => {
-            const classificacoesValidas = ["Livre", "10+", "12+", "16+", "18+"];
-            if (!classificacoesValidas.includes(classificacao)) {
-              console.log(
-                "Classificação inválida! Use apenas: Livre, 10+, 12+, 16+, 18+."
-              );
-              menuFuncionario();
-              return;
-            }
-
-            rl.question(
-              "Digite a disponibilidade do jogo (aluguel ou venda): ",
-              (disponibilidade) => {
-                rl.question("Digite o preço do jogo: R$", (precoStr) => {
-                  const preco = parseFloat(precoStr);
-                  if (isNaN(preco)) {
-                    console.log("Preço inválido.");
-                    menuFuncionario();
+              const query =
+                "INSERT INTO jogos (nome, genero, classificacao, disponibilidade, preco, quantidade) VALUES (?, ?, ?, ?, ?, ?)";
+              connection.query(
+                query,
+                [nome, genero, classificacao, disponibilidade, preco, quantidade],
+                (err, results) => {
+                  if (err) {
+                    console.log("Erro ao cadastrar o jogo:", err);
                     return;
                   }
-
-                  rl.question(
-                    "Digite a quantidade em estoque: ",
-                    (quantidadeStr) => {
-                      const quantidade = parseInt(quantidadeStr);
-                      if (isNaN(quantidade)) {
-                        console.log("Quantidade inválida.");
-                        menuFuncionario();
-                        return;
-                      }
-
-                      // Salvar no banco de dados
-                      const query =
-                        "INSERT INTO jogos (nome, genero, classificacao, disponibilidade, preco, quantidade) VALUES (?, ?, ?, ?, ?, ?)";
-                      connection.query(
-                        query,
-                        [
-                          nome,
-                          genero,
-                          classificacao,
-                          disponibilidade,
-                          preco,
-                          quantidade,
-                        ],
-                        (err, results) => {
-                          if (err) {
-                            console.log("Erro ao cadastrar jogo:", err);
-                            return;
-                          }
-                          console.log("\nProduto cadastrado com sucesso!");
-                          menuFuncionario();
-                        }
-                      );
-                    }
-                  );
-                });
-              }
-            );
-          }
-        );
+                  console.log("\nJogo cadastrado com sucesso!");
+                  menuFuncionario();
+                }
+              );
+            });
+          });
+        });
       });
     });
   });
 }
 
+// Função para ver histórico de vendas
 function historicoVendasFunc() {
   const query = "SELECT * FROM historico_vendas";
   connection.query(query, (err, results) => {
     if (err) {
-      console.log("Erro ao acessar o histórico de vendas:", err);
+      console.log("Erro ao visualizar histórico de vendas:", err);
       menuFuncionario();
       return;
     }
 
     if (results.length === 0) {
-      console.log("\nNenhuma venda registrada.");
+      console.log("\nNenhum histórico de vendas disponível.");
       menuFuncionario();
       return;
     }
 
     console.log("\nHistórico de Vendas:");
     results.forEach((venda) => {
+      const valorTotal = Number(venda.valor_total) || 0; // converte para número, se falhar usa 0
       console.log(
-        `Código Jogo: ${venda.codigoJogo} | Nome Jogo: ${
-          venda.nomeJogo
-        } | Quantidade Vendida: ${
-          venda.quantidadeVendida
-        } | Valor Total: R$${venda.valorTotal.toFixed(2)}`
+        `ID: ${venda.id} | Código do Jogo: ${venda.codigo_jogo} | Nome do Jogo: ${venda.nome_jogo} | Quantidade Vendida: ${venda.quantidade_vendida} | Valor Total: R$${valorTotal.toFixed(2)} | Data da Venda: ${venda.data_venda}`
       );
-    });
+    });    
     menuFuncionario();
   });
 }
 
+// Função auxiliar para perguntas assíncronas (exemplo)
 function askQuestion(query) {
   return new Promise((resolve) => rl.question(query, resolve));
 }
 
+// Função para atualizar informações do jogo
 async function atualizarInformacoes() {
-  connection.query("SELECT * FROM jogos", async (err, jogos) => {
-    if (err) {
-      console.log("Erro ao buscar jogos:", err);
-      menuFuncionario();
-      return;
-    }
+  try {
+    // 1. Buscar todos os jogos
+    const jogos = await new Promise((resolve, reject) => {
+      connection.query("SELECT * FROM jogos", (err, results) => {
+        if (err) reject(err);
+        else resolve(results);
+      });
+    });
 
     if (jogos.length === 0) {
       console.log("\nNenhum jogo cadastrado.");
-      menuFuncionario();
-      return;
+      return menuFuncionario();
     }
 
-    console.log("\n=== Jogos cadastrados ===");
+    // 2. Listar todos os jogos com informações
+    console.log("\nJogos cadastrados:");
     jogos.forEach((jogo) => {
+      const preco = Number(jogo.preco) || 0;
       console.log(
-        `Código: ${jogo.id} | Nome: ${jogo.nome} | Gênero: ${
-          jogo.genero
-        } | Preço: R$${Number(jogo.preco).toFixed(2)} | Quantidade: ${
-          jogo.quantidade
-        }`
+        `Código: ${jogo.id} | Nome: ${jogo.nome} | Gênero: ${jogo.genero} | Classificação: ${jogo.classificacao} | Disponibilidade: ${jogo.disponibilidade} | Preço: R$${preco.toFixed(
+          2
+        )} | Quantidade: ${jogo.quantidade}`
       );
     });
 
+    // 3. Perguntar qual jogo atualizar
     const codigo = await askQuestion(
       "\nDigite o código do jogo que deseja atualizar: "
     );
@@ -709,11 +700,11 @@ async function atualizarInformacoes() {
     const jogo = jogos.find((j) => j.id == codigo);
     if (!jogo) {
       console.log("Jogo não encontrado.");
-      menuFuncionario();
-      return;
+      return menuFuncionario();
     }
 
-    console.log(`\nInformações atuais do jogo:`);
+    // 4. Mostrar informações atuais
+    console.log("\nInformações atuais do jogo:");
     console.log(`Nome: ${jogo.nome}`);
     console.log(`Gênero: ${jogo.genero}`);
     console.log(`Classificação: ${jogo.classificacao}`);
@@ -721,18 +712,24 @@ async function atualizarInformacoes() {
     console.log(`Preço: R$${Number(jogo.preco).toFixed(2)}`);
     console.log(`Quantidade: ${jogo.quantidade}`);
 
-    const alterarNome = await askQuestion("Deseja alterar o nome? (s/n): ");
+    // 5. Perguntar se deseja alterar e, se sim, pedir novo valor
+
+    const alterarNome = await askQuestion(
+      "Deseja alterar o nome? (s/ pressione Enter para manter o mesmo): "
+    );
     if (alterarNome.toLowerCase() === "s") {
       jogo.nome = await askQuestion("Digite o novo nome: ");
     }
 
-    const alterarGenero = await askQuestion("Deseja alterar o gênero? (s/n): ");
+    const alterarGenero = await askQuestion(
+      "Deseja alterar o gênero? (s/ pressione Enter para manter o mesmo): "
+    );
     if (alterarGenero.toLowerCase() === "s") {
       jogo.genero = await askQuestion("Digite o novo gênero: ");
     }
 
     const alterarClassificacao = await askQuestion(
-      "Deseja alterar a classificação? (s/n): "
+      "Deseja alterar a classificação? (s/ pressione Enter para manter o mesmo): "
     );
     if (alterarClassificacao.toLowerCase() === "s") {
       jogo.classificacao = await askQuestion(
@@ -741,7 +738,7 @@ async function atualizarInformacoes() {
     }
 
     const alterarDisponibilidade = await askQuestion(
-      "Deseja alterar a disponibilidade? (s/n): "
+      "Deseja alterar a disponibilidade? (s/ pressione Enter para manter o mesmo): "
     );
     if (alterarDisponibilidade.toLowerCase() === "s") {
       jogo.disponibilidade = await askQuestion(
@@ -749,24 +746,27 @@ async function atualizarInformacoes() {
       );
     }
 
-    const alterarPreco = await askQuestion("Deseja alterar o preço? (s/n): ");
+    const alterarPreco = await askQuestion(
+      "Deseja alterar o preço? (s/ pressione Enter para manter o mesmo): "
+    );
     if (alterarPreco.toLowerCase() === "s") {
       const novoPreco = await askQuestion("Digite o novo preço: R$");
       jogo.preco = parseFloat(novoPreco);
     }
 
     const alterarQuantidade = await askQuestion(
-      "Deseja alterar a quantidade? (s/n): "
+      "Deseja alterar a quantidade? (s/ pressione Enter para manter o mesmo): "
     );
     if (alterarQuantidade.toLowerCase() === "s") {
       const novaQuantidade = await askQuestion("Digite a nova quantidade: ");
       jogo.quantidade = parseInt(novaQuantidade);
     }
 
+    // 6. Atualizar no banco de dados
     const updateQuery = `
-            UPDATE jogos SET nome = ?, genero = ?, classificacao = ?, disponibilidade = ?, preco = ?, quantidade = ?
-            WHERE id = ?
-        `;
+      UPDATE jogos SET nome = ?, genero = ?, classificacao = ?, disponibilidade = ?, preco = ?, quantidade = ?
+      WHERE id = ?
+    `;
 
     connection.query(
       updateQuery,
@@ -788,195 +788,93 @@ async function atualizarInformacoes() {
         menuFuncionario();
       }
     );
-  });
+  } catch (error) {
+    console.log("Erro ao atualizar informações:", error);
+    menuFuncionario();
+  }
 }
 
-function excluirJogo() {
-  connection.query("SELECT * FROM jogos", (err, jogos) => {
-    if (err) {
-      console.log("Erro ao buscar jogos:", err);
-      menuFuncionario();
-      return;
-    }
+// Função para excluir jogo
+async function excluirJogo() {
+  try {
+    // 1. Buscar todos os jogos
+    const jogos = await new Promise((resolve, reject) => {
+      connection.query("SELECT * FROM jogos", (err, results) => {
+        if (err) reject(err);
+        else resolve(results);
+      });
+    });
 
     if (jogos.length === 0) {
       console.log("\nNenhum jogo cadastrado.");
-      menuFuncionario();
-      return;
+      return menuFuncionario();
     }
 
-    console.log("\n=== Jogos cadastrados ===");
+    // 2. Listar todos os jogos com informações
+    console.log("\nJogos cadastrados:");
     jogos.forEach((jogo) => {
+      const preco = Number(jogo.preco) || 0;
       console.log(
-        `Código: ${jogo.id} | Nome: ${jogo.nome} | Gênero: ${
-          jogo.genero
-        } | Preço: R$${Number(jogo.preco).toFixed(2)} | Quantidade: ${
-          jogo.quantidade
-        }`
+        `Código: ${jogo.id} | Nome: ${jogo.nome} | Gênero: ${jogo.genero} | Classificação: ${jogo.classificacao} | Disponibilidade: ${jogo.disponibilidade} | Preço: R$${preco.toFixed(
+          2
+        )} | Quantidade: ${jogo.quantidade}`
       );
     });
 
-    rl.question("\nDigite o código do jogo que deseja excluir: ", (codigo) => {
-      const jogo = jogos.find((j) => j.id == codigo);
-      if (!jogo) {
-        console.log("Jogo não encontrado.");
-        menuFuncionario();
-        return;
-      }
+    // 3. Perguntar qual jogo excluir
+    const codigo = await askQuestion(
+      "\nDigite o código do jogo que deseja excluir: "
+    );
 
-      rl.question(
-        `Tem certeza que deseja excluir o jogo "${jogo.nome}"? (s/n): `,
-        (confirma) => {
-          if (confirma.toLowerCase() === "s") {
-            const query = "DELETE FROM jogos WHERE id = ?";
-            connection.query(query, [codigo], (err, results) => {
-              if (err) {
-                console.log("Erro ao excluir o jogo:", err);
-              } else if (results.affectedRows > 0) {
-                console.log("\nJogo excluído com sucesso!");
-              } else {
-                console.log("\nJogo não encontrado.");
-              }
-              menuFuncionario();
-            });
-          } else {
-            console.log("Exclusão cancelada.");
-            menuFuncionario();
-          }
-        }
-      );
+    const jogo = jogos.find((j) => j.id == codigo);
+    if (!jogo) {
+      console.log("Jogo não encontrado.");
+      return menuFuncionario();
+    }
+
+    // 4. Confirmar exclusão
+    const confirmar = await askQuestion(
+      `Tem certeza que deseja excluir o jogo "${jogo.nome}"? (s/ pressione Enter para cancelar): `
+    );
+    if (confirmar.toLowerCase() !== "s") {
+      console.log("Exclusão cancelada.");
+      return menuFuncionario();
+    }
+
+    // 5. Exibir mensagem de exclusão e aguardar 2 segundos
+    console.log("Excluindo jogo...");
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    // 6. Executar exclusão no banco
+    await new Promise((resolve, reject) => {
+      connection.query("DELETE FROM jogos WHERE id = ?", [codigo], (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
     });
-  });
-}
 
-// Menu do Cliente
-function menuCliente() {
-  rl.question(
-    "\nMenu do Cliente:\n1. Ver Catálogo\n2. Ver Carrinho\n3. Finalizar Compra\n4. Sair\nEscolha: ",
-    (opcao) => {
-      switch (opcao) {
-        case "1":
-          listarProdutos();
-          break;
-        case "2":
-          verCarrinho();
-          break;
-        case "3":
-          finalizarCompra();
-          break;
-        case "4":
-          console.log("\nObrigado pela preferência! Volte sempre!\n");
-          iniciar();
-          break;
-        default:
-          console.log("\nOpção inválida! Tente novamente.\n");
-          menuCliente();
-      }
-    }
-  );
-}
-
-function finalizarCompra() {
-  if (carrinho.length === 0) {
-    console.log("\nCarrinho vazio! Adicione produtos antes de finalizar.");
-    menuCliente();
-    return;
+    console.log("Jogo excluído com sucesso!");
+    menuFuncionario();
+  } catch (error) {
+    console.log("Erro ao excluir o jogo:", error);
+    menuFuncionario();
   }
-
-  let totalCompra = 0;
-
-  console.log("\nItens no carrinho:");
-  carrinho.forEach((item, index) => {
-    console.log(
-      `${index + 1}. ${item.produto.nome} - Quantidade: ${
-        item.quantidade
-      } | Preço: R$${(item.produto.preco * item.quantidade).toFixed(2)}`
-    );
-    totalCompra += item.produto.preco * item.quantidade;
-  });
-
-  console.log(`\nTotal da compra: R$${totalCompra.toFixed(2)}`);
-
-  rl.question(
-    "\nEscolha a forma de pagamento:\n1. Crédito\n2. Débito\n3. PIX\nOpção: ",
-    (opcaoPagamento) => {
-      switch (opcaoPagamento) {
-        case "1":
-          const parcelamentoMaximo = carrinho.length > 3 ? 5 : 3;
-          rl.question(`\nDeseja parcelar a compra? (s/n): `, (querParcelar) => {
-            if (querParcelar.toLowerCase() === "s") {
-              rl.question(
-                `Em quantas vezes deseja parcelar (máximo ${parcelamentoMaximo} vezes)? `,
-                (parcelas) => {
-                  parcelas = parseInt(parcelas);
-                  if (
-                    isNaN(parcelas) ||
-                    parcelas < 1 ||
-                    parcelas > parcelamentoMaximo
-                  ) {
-                    console.log("\nNúmero de parcelas inválido.");
-                    menuCliente();
-                    return;
-                  }
-                  console.log(
-                    `\nCompra no crédito em ${parcelas} vezes. Processando...`
-                  );
-                  setTimeout(() => {
-                    console.log("Pagamento realizado!");
-                    carrinho = [];
-                    menuCliente();
-                  }, 5000);
-                }
-              );
-            } else {
-              console.log("\nCompra no crédito. Processando...");
-              setTimeout(() => {
-                console.log("Pagamento efetuado!");
-                carrinho = [];
-                menuCliente();
-              }, 5000);
-            }
-          });
-          break;
-        case "2":
-          console.log("\nCompra no débito. Processando...");
-          setTimeout(() => {
-            console.log("Pagamento efetuado!");
-            carrinho = [];
-            menuCliente();
-          }, 5000);
-          break;
-        case "3":
-          console.log("\nCompra via PIX. Por favor, escaneie o QR Code...");
-          setTimeout(() => {
-            console.log("Pagamento efetuado!");
-            carrinho = [];
-            menuCliente();
-          }, 5000);
-          break;
-        default:
-          console.log("\nOpção de pagamento inválida.");
-          menuCliente();
-      }
-    }
-  );
 }
 
-function verCarrinho() {
-  if (carrinho.length === 0) {
-    console.log("\nCarrinho vazio!\n");
-    menuCliente();
-    return;
-  }
-
-  console.log("\nItens no carrinho:");
-  carrinho.forEach((item, index) => {
-    console.log(
-      `${index + 1}. ${item.produto.nome} - Quantidade: ${
-        item.quantidade
-      } | Preço: R$${(item.produto.preco * item.quantidade).toFixed(2)}`
-    );
-  });
-
-  menuCliente();
-}
+// Exportar as funções
+module.exports = {
+  iniciar,
+  loginFuncionario,
+  menuFuncionario,
+  menuCliente,
+  listarProdutos,
+  verCarrinho,
+  finalizarCompra,
+  cadastrarFuncionario,
+  autenticarFuncionario,
+  listarProdutosFuncionario,
+  cadastrarProduto,
+  historicoVendasFunc,
+  atualizarInformacoes,
+  excluirJogo,
+};
